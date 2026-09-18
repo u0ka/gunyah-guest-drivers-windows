@@ -216,6 +216,14 @@ RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
         virtqueue_notify(vq);
     }
 
+    /* Wake the fallback waiter after submitting the flush request. The FUA
+     * continuation can run from the ISR, where KeSetEvent is not permitted;
+     * its original request already put the fallback thread into busy mode. */
+    if (!bIsr)
+    {
+        VioStorPollKick(DeviceExtension);
+    }
+
     return result;
 }
 
@@ -292,11 +300,8 @@ RhelDoReadWrite(PVOID DeviceExtension, PSRB_TYPE Srb)
         virtqueue_notify(vq);
     }
 
-    /* Wake the completion poll thread (restricted DMA pool path). */
-    if (adaptExt->rdma.Active)
-    {
-        VioStorPollKick(DeviceExtension);
-    }
+    /* Wake the fallback waiter after submission; normal completion remains ISR/DPC. */
+    VioStorPollKick(DeviceExtension);
 
     if (adaptExt->num_queues > 1)
     {
@@ -487,6 +492,8 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
         RhelDbgPrint(TRACE_LEVEL_INFORMATION, " %s virtqueue_notify %d.\n", __FUNCTION__, QueueNumber);
         virtqueue_notify(vq);
     }
+    /* Wake the fallback waiter after submitting the discard request. */
+    VioStorPollKick(DeviceExtension);
     return result;
 }
 
@@ -596,6 +603,9 @@ RhelGetSerialNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     {
         virtqueue_notify(vq);
     }
+
+    /* Wake the fallback waiter after submitting the serial request. */
+    VioStorPollKick(DeviceExtension);
 
     return result;
 }

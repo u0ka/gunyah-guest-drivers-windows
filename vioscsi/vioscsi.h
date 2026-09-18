@@ -367,12 +367,12 @@ typedef struct _ADAPTER_EXTENSION
     /* Restricted DMA pool (Gunyah protected VM). When rdma.Active, vrings and
      * all device-visible I/O staging live in the contiguous pool region; see
      * vioscsi_rdma.c and the shared client rdmapool/rdmaclient.c (connection,
-     * bounce allocator, completion poll thread). Inactive on QEMU/KVM (no
-     * ACPI\RDMA0000 device), keeping the normal DMA path. */
+     * bounce allocator, completion fallback). The fallback is active for
+     * ordinary INTx even when the rdmapool device is absent. */
     RDMA_CLIENT rdma;
     ULONG disablePoll;    /* registry DisableCompletionPoll: 1 => ISR/DPC only */
-    ULONG pollIntervalUs; /* registry PollIntervalUs: sleep this many us between drains
-                           * while I/O is outstanding (default 1000 = 1ms gentle poll);
+    ULONG pollIntervalUs; /* registry PollIntervalUs: timeout before fallback drain
+                           * while I/O is outstanding (default 2000 = 2ms);
                            * 0 => tight KeStallExecutionProcessor spin (max IOPS) */
 } ADAPTER_EXTENSION, *PADAPTER_EXTENSION;
 

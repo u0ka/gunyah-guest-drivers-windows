@@ -35,8 +35,7 @@
 
 /* Poll thread cadence defaults (see RdmaClientStartPoll). */
 #define RDMA_CLIENT_POLL_SPIN_US     10  /* tight-spin stall between drains (PollIntervalUs==0) */
-#define RDMA_CLIENT_POLL_IDLE_MS     100 /* idle safety-net wakeup */
-#define RDMA_CLIENT_POLL_INTERVAL_US 1000
+#define RDMA_CLIENT_POLL_INTERVAL_US 2000
 
 /* Return TRUE while the driver has requests outstanding (poll thread keeps draining). */
 typedef BOOLEAN (*RDMA_CLIENT_BUSY_CB)(PVOID Context);
@@ -75,9 +74,10 @@ typedef struct _RDMA_CLIENT
 
     /* --- completion poll thread (RdmaClientStartPoll) --- */
     PVOID PollThread;       /* PKTHREAD referenced object */
-    KEVENT PollWake;        /* signalled by the submit path via RdmaClientPollKick */
+    KEVENT PollWake;        /* submit wake for the idle fallback waiter */
     volatile LONG PollStop; /* set to 1 to ask the thread to exit */
-    ULONG PollIntervalUs;   /* us to sleep between drains while busy; 0 = tight spin */
+    volatile LONG PollWaiting; /* 1 while a submit may need to wake an idle waiter */
+    ULONG PollIntervalUs;   /* timeout between fallback drains while busy; 0 = tight spin */
     RDMA_CLIENT_BUSY_CB BusyCb;
     RDMA_CLIENT_DRAIN_CB DrainCb;
     PVOID CbContext;
@@ -154,11 +154,11 @@ PVOID RdmaClientAllocChunk(PRDMA_CLIENT c);
 VOID RdmaClientFreeChunk(PRDMA_CLIENT c, PVOID chunk);
 
 /*
- * Start the completion poll thread (PASSIVE_LEVEL). While BusyCb returns TRUE
- * the thread calls DrainCb then sleeps PollIntervalUs between drains (default
- * 1ms gentle poll; 0 = tight KeStallExecutionProcessor spin for max IOPS);
- * when idle it blocks on the wake event with a RDMA_CLIENT_POLL_IDLE_MS
- * safety-net timeout (~0 CPU).
+ * Start the completion fallback thread (PASSIVE_LEVEL). While BusyCb returns
+ * TRUE, ISR/DPC remains the fast path and the thread waits for PollWake or
+ * PollIntervalUs timeout; only a timeout calls DrainCb. PollIntervalUs==0 is
+ * an explicit tight KeStallExecutionProcessor diagnostic mode. When idle the
+ * thread blocks indefinitely on the wake event.
  */
 NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
                              RDMA_CLIENT_BUSY_CB BusyCb,
@@ -166,7 +166,7 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
                              PVOID CbContext,
                              ULONG PollIntervalUs);
 VOID RdmaClientStopPoll(PRDMA_CLIENT c);
-/* Wake the poll thread after submitting work (any IRQL). */
+/* Wake an idle fallback waiter after submitting work (any IRQL). */
 VOID RdmaClientPollKick(PRDMA_CLIENT c);
 
 #endif /* _RDMACLIENT_H_ */

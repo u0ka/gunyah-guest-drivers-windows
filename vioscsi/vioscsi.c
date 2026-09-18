@@ -615,16 +615,14 @@ VioScsiPassiveInitializeRoutine(IN PVOID DeviceExtension)
     adaptExt->dpc_ok = TRUE;
 
     /*
-     * Restricted DMA pool path: start the completion poll thread (needs
-     * PASSIVE_LEVEL, which is why it lives here and not in HwInitialize). It
-     * reaps completions within ~PollIntervalUs when a completion interrupt to
-     * an idle vCPU is delivered late or not at all (no 250ms StorPort-watchdog
-     * stall), and blocks entirely when no I/O is outstanding. The ISR/DPC path
-     * (INTx, MSISupported=0) stays wired too. Registry overrides
-     * (Services\vioscsi\Parameters): PollIntervalUs = us between drains (0 =>
-     * tight spin, max IOPS); DisableCompletionPoll=1 => interrupt-only.
+     * Start the completion fallback for ordinary INTx as well as the
+     * restricted-DMA path. It blocks indefinitely when idle; while requests
+     * are outstanding it waits for PollWake or a timeout. ISR/DPC remains the
+     * fast path. Registry overrides (Services\vioscsi\Parameters):
+     * PollIntervalUs is the timeout between fallback drains; 0 enables the
+     * diagnostic tight-spin mode; DisableCompletionPoll=1 disables fallback.
      */
-    if (adaptExt->rdma.Active)
+    if (!adaptExt->dump_mode && !adaptExt->msix_enabled)
     {
         adaptExt->pollIntervalUs = VIOSCSI_POLL_INTERVAL_US;
         VioScsiReadRegistryParameter(DeviceExtension,

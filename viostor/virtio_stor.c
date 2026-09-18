@@ -621,9 +621,9 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
     adaptExt->dpc_ok = TRUE;
 
     /*
-     * Restricted DMA pool path: carve the bounce allocator out of the rdmapool
-     * region left after the vrings, and start the completion poll thread. Both
-     * require PASSIVE_LEVEL, which is why they live here and not in HwInitialize.
+     * The bounce allocator is only needed on the restricted-DMA path. The
+     * completion fallback is also useful for ordinary INTx devices, so start
+     * it for INTx even when rdmapool is absent.
      */
     if (adaptExt->rdma.Active)
     {
@@ -632,15 +632,11 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
             RhelDbgPrint(TRACE_LEVEL_FATAL, " bounce init failed\n");
             return FALSE;
         }
-        /* The bounce allocator above is required on the rdmapool path regardless of
-         * how completions are reaped. Completion strategy (workaround default): run the
-         * poll thread ON, but as a GENTLE periodic poll -- it sleeps PollIntervalUs
-         * (default 1ms) between drains instead of the old tight busy-spin, so it reaps
-         * completions within ~1ms (no 250ms StorPort-watchdog stall that capped INTx at
-         * ~5MB/s) at low CPU cost, and it blocks entirely when no I/O is outstanding.
-         * The ISR/DPC path (INTx, MSISupported=0) stays wired too. Registry overrides
-         * (Services\viostor\Parameters): PollIntervalUs = us between drains (0 => tight
-         * spin, max IOPS); DisableCompletionPoll=1 => interrupt-only (no poll thread). */
+    }
+
+    /* ISR/DPC is the fast path; poll only drains after its timeout expires. */
+    if (!adaptExt->dump_mode && !adaptExt->msix_enabled)
+    {
         adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;
         VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "PollIntervalUs", &adaptExt->pollIntervalUs);
         adaptExt->disablePoll = 0;

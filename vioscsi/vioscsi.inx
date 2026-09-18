@@ -93,17 +93,17 @@ HKR,,TypesSupported,%REG_DWORD%,7
 HKR, "Parameters\PnpInterface", "5", %REG_DWORD%, 0x00000001
 HKR, "Parameters", "BusType", %REG_DWORD%, 0x0000000A
 HKR, "Parameters", DmaRemappingCompatible,0x00010001,0
-; Completion reaping on the restricted-DMA-pool (Gunyah pVM) path. On this platform a
-; completion interrupt to an idle vCPU is delivered late or not at all, stalling I/O until
-; the 250ms StorPort watchdog. A poll thread drains the virtqueues while requests are
-; outstanding (only when the rdmapool device is present; inert on QEMU/KVM).
-;  PollIntervalUs: microseconds the poll thread sleeps between drains while I/O is in
-;    flight. Key absent => default 1000 (1ms) = gentle poll: reaps within ~1ms at low CPU.
+; Completion reaping for INTx on platforms such as Gunyah. A completion interrupt to an
+; idle vCPU can be delivered late or not at all, stalling I/O until the 250ms StorPort
+; watchdog. A fallback thread drains the virtqueues after a timeout while requests are
+; outstanding; ISR/DPC remains the fast path.
+;  PollIntervalUs: timeout in microseconds between fallback drains while I/O is in
+;    flight. Key absent => default 2000 (2ms). ISR/DPC remains the fast path.
 ;    Set 0 for a tight busy-spin (max IOPS, but pegs a core).
 ;  DisableCompletionPoll: 1 = do not run the poll thread (rely on ISR/DPC only). Default 0.
 ; Read via StorPortRegistryRead(Global=1) from Services\vioscsi\Parameters.
 HKR, "Parameters", DisableCompletionPoll, 0x00010001, 0
-HKR, "Parameters", PollIntervalUs, 0x00010001, 1000
+HKR, "Parameters", PollIntervalUs, 0x00010001, 2000
 
 
 [pnpsafe_pci_addreg_msix]

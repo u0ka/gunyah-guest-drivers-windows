@@ -41,7 +41,7 @@
  */
 #define BOUNCE_DATA_CHUNK_SIZE   (256 * 1024)
 
-/* Default gentle poll interval; registry PollIntervalUs overrides (0 = tight spin). */
+/* Default fallback timeout; registry PollIntervalUs overrides (0 = tight spin). */
 #define VIOSCSI_POLL_INTERVAL_US RDMA_CLIENT_POLL_INTERVAL_US
 
 /*

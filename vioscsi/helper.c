@@ -173,11 +173,8 @@ VOID SendSRB(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
         virtqueue_notify(adaptExt->vq[QueueNumber]);
     }
 
-    /* Wake the completion poll thread (restricted DMA pool path). */
-    if (adaptExt->rdma.Active)
-    {
-        VioScsiPollKick(DeviceExtension);
-    }
+    /* Wake the fallback waiter after submission; normal completion remains ISR/DPC. */
+    VioScsiPollKick(DeviceExtension);
 
     EXIT_FN_SRB();
 }
@@ -286,12 +283,8 @@ DeviceReset(IN PVOID DeviceExtension)
         return FALSE;
     }
     adaptExt->tmf_infly = TRUE;
-    /* Wake the completion poll thread so the TMF response is reaped promptly
-     * even if the completion interrupt goes missing (restricted DMA pool). */
-    if (adaptExt->rdma.Active)
-    {
-        VioScsiPollKick(DeviceExtension);
-    }
+    /* Wake the fallback waiter after submitting the TMF request. */
+    VioScsiPollKick(DeviceExtension);
     return TRUE;
 }
 

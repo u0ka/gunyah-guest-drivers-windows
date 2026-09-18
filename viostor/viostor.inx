@@ -94,14 +94,15 @@ HKR, "Parameters", "BusType", %REG_DWORD%, 0x00000001
 HKR, "Parameters", DmaRemappingCompatible,0x00010001,0
 ; Completion reaping. On some platforms (e.g. restricted-DMA-pool / Gunyah) a completion
 ; interrupt to an idle vCPU is delivered late or not at all, stalling I/O until the 250ms
-; StorPort watchdog. A poll thread drains the virtqueues while requests are outstanding.
-;  PollIntervalUs: microseconds the poll thread sleeps between drains while I/O is in
-;    flight. Key absent => default 1000 (1ms) = gentle poll: reaps within ~1ms at low CPU.
+; StorPort watchdog. A fallback thread drains the virtqueues after a timeout while requests
+; are outstanding; ISR/DPC remains the fast path.
+;  PollIntervalUs: timeout in microseconds between fallback drains while I/O is in
+;    flight. Key absent => default 2000 (2ms). ISR/DPC remains the fast path.
 ;    Set 0 for a tight busy-spin (max IOPS, but pegs a core).
 ;  DisableCompletionPoll: 1 = do not run the poll thread (rely on ISR/DPC only). Default 0.
 ; Read via StorPortRegistryRead(Global=1) from Services\viostor\Parameters.
 HKR, "Parameters", DisableCompletionPoll, 0x00010001, 0
-HKR, "Parameters", PollIntervalUs, 0x00010001, 1000
+HKR, "Parameters", PollIntervalUs, 0x00010001, 2000
 
 [pnpsafe_pci_addreg_msix]
 HKR, "Interrupt Management",, 0x00000010
@@ -134,4 +135,3 @@ REG_DWORD      = 0x00010001
 SERVICE_KERNEL_DRIVER  = 1
 SERVICE_BOOT_START     = 0
 SERVICE_ERROR_NORMAL   = 1
-

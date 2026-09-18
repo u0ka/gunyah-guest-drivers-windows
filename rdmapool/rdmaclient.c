@@ -438,17 +438,12 @@ NTSTATUS RdmaClientBounceInit(PRDMA_CLIENT c,
 }
 
 /* ------------------------------------------------------------------ */
-/* Completion poll thread (~1ms cadence; idle = fully blocked)         */
+/* Completion poll thread (interrupt fast path + timed fallback)       */
 /* ------------------------------------------------------------------ */
 
 static VOID RdmaClientPollThreadRoutine(PVOID Context)
 {
     PRDMA_CLIENT c = (PRDMA_CLIENT)Context;
-    LARGE_INTEGER idleTick;
-
-    /* Negative = relative, 100ns units. */
-    idleTick.QuadPart = -(LONGLONG)(10 * 1000 * RDMA_CLIENT_POLL_IDLE_MS);
-
     for (;;)
     {
         if (InterlockedCompareExchange(&c->PollStop, 0, 0) != 0)
@@ -456,36 +451,45 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
             break;
         }
 
+        /* Publish the idle-wait state before checking BusyCb so a concurrent
+         * submit cannot be missed between the check and the wait. */
+        InterlockedExchange(&c->PollWaiting, 1);
         if (c->BusyCb(c->CbContext))
         {
-            /*
-             * Busy: drain, then either sleep PollIntervalUs (gentle periodic
-             * poll, default 1ms: reaps within ~1ms at low CPU instead of
-             * stalling until the ~250ms StorPort watchdog when a completion
-             * interrupt to an idle vCPU goes missing) or tight-spin when
-             * PollIntervalUs==0 (max IOPS, pegs this thread's core only while
-             * I/O is in flight). This thread runs at PASSIVE_LEVEL — DrainCb
-             * releases its locks before returning — so KeDelayExecutionThread
-             * is legal.
-             */
-            c->DrainCb(c->CbContext);
+            /* Once busy, submissions do not keep waking this thread. The
+             * timeout is the completion fallback and cannot be starved by a
+             * high submission rate. */
+            InterlockedExchange(&c->PollWaiting, 0);
             if (c->PollIntervalUs == 0)
             {
+                /* Explicit diagnostic mode: continuously poll while busy. */
+                c->DrainCb(c->CbContext);
                 KeStallExecutionProcessor(RDMA_CLIENT_POLL_SPIN_US);
             }
             else
             {
                 LARGE_INTEGER pollDelay;
-                /* relative (negative), 100ns units: 1us = 10 * 100ns */
+                NTSTATUS waitStatus;
+
+                /* ISR/DPC is the fast path. Drain only after the fallback
+                 * timeout; a submit wakes an idle waiter, while busy state
+                 * relies on this timeout and cannot be submission-starved. */
                 pollDelay.QuadPart = -(LONGLONG)(10 * (LONGLONG)c->PollIntervalUs);
-                KeDelayExecutionThread(KernelMode, FALSE, &pollDelay);
+                waitStatus = KeWaitForSingleObject(&c->PollWake,
+                                                   Executive,
+                                                   KernelMode,
+                                                   FALSE,
+                                                   &pollDelay);
+                if (waitStatus == STATUS_TIMEOUT)
+                {
+                    c->DrainCb(c->CbContext);
+                }
             }
         }
         else
         {
-            /* Idle: block until a submit kicks us (safety-net timeout). ~0 CPU. */
-            (void)KeWaitForSingleObject(&c->PollWake, Executive, KernelMode, FALSE, &idleTick);
-            c->DrainCb(c->CbContext);
+            /* Idle: wait indefinitely for a submit. This consumes no CPU. */
+            (void)KeWaitForSingleObject(&c->PollWake, Executive, KernelMode, FALSE, NULL);
         }
     }
 
@@ -494,7 +498,7 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
 
 VOID RdmaClientPollKick(PRDMA_CLIENT c)
 {
-    if (c->PollThread)
+    if (c->PollThread && InterlockedCompareExchange(&c->PollWaiting, 0, 0) != 0)
     {
         KeSetEvent(&c->PollWake, IO_NO_INCREMENT, FALSE);
     }
@@ -510,13 +514,9 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
     HANDLE hThread = NULL;
     OBJECT_ATTRIBUTES oa;
 
-    if (!c->Active)
-    {
-        return STATUS_NOT_SUPPORTED; /* poll thread only needed on the rdmapool path */
-    }
-
     KeInitializeEvent(&c->PollWake, SynchronizationEvent, FALSE);
     c->PollStop = 0;
+    c->PollWaiting = 1;
     c->PollThread = NULL;
     c->BusyCb = BusyCb;
     c->DrainCb = DrainCb;
@@ -542,10 +542,9 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
         return status;
     }
 
-    DbgPrint("%s poll: thread started (interval %uus, idle %ums safety net)\n",
+    DbgPrint("%s poll: thread started (interrupt fast path, timeout %uus)\n",
              c->Tag,
-             c->PollIntervalUs,
-             RDMA_CLIENT_POLL_IDLE_MS);
+             c->PollIntervalUs);
     return STATUS_SUCCESS;
 }
 
